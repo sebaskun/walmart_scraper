@@ -15,7 +15,7 @@ PRICES_STOCK_PATH = os.path.join(ASSETS_DIR, "PRICES-STOCK.csv")
 def process_csv_files():
     products_df = pd.read_csv(filepath_or_buffer=PRODUCTS_PATH, sep="|",)
     prices_stock_df = pd.read_csv(filepath_or_buffer=PRICES_STOCK_PATH, sep="|",)
-
+    allowed_branches = ['MM', 'RHSM']
     # removing html tags
     products_df['DESCRIPTION'] = products_df['DESCRIPTION'].str.replace('<[^<]+?>', '')
 
@@ -65,8 +65,8 @@ def process_csv_files():
     products_df['package'] = products_df.apply(get_package, axis=1)
     products_df['DESCRIPTION'] = products_df.apply(extract_description, axis=1)
     products_df['store'] = "Richart's"
+    products_df = products_df[products_df['NAME'].notna()]
 
-    allowed_branches = ['MM', 'RHSM']
     prices_stock_df = prices_stock_df[(prices_stock_df['BRANCH'].isin(allowed_branches)) & (prices_stock_df['STOCK'] > 0)]
 
     # write data to database
@@ -80,41 +80,78 @@ def process_csv_files():
         'CATEGORY': 'category'
     }, inplace=True)
 
-    del products_df['BUY_UNIT']
-    del products_df['DESCRIPTION_STATUS']
-    del products_df['ORGANIC_ITEM']
-    del products_df['KIRLAND_ITEM']
-    del products_df['FINELINE_NUMBER']
-
-    # output = io.StringIO()
-    # products_df.to_csv(output, sep=',', header=False, index=False)
-
+    prices_stock_df.rename(columns={
+        'SKU': 'sku',
+        'BRANCH': 'branch',
+        'PRICE': 'price',
+        'STOCK': 'stock',
+    }, inplace=True)
+    
     #Create the session
-    session = sessionmaker()
-    session.configure(bind=engine)
-    s = session()
+    Session = sessionmaker(bind=engine)
+    s = Session()
 
+    id_list =[]
+    # product
     try:
         for i,row in products_df.iterrows():
-            record = Product(**{
-                'store' : row['store'],
-                'sku' : row['sku'],
-                'barcodes' : row['barcodes'],
-                'name' : row['name'],
-                'description' : row['description'],
-                'package' : row['package'],
-                'image_url' : row['image_url'],
-                'category' : row['category']
-            })
-            s.add(record)
+            # check if product exists
+            product = (
+                s.query(Product)
+                .filter_by(store=row['store'], sku=row["sku"])
+                .first()
+            )
 
+            if product is None:
+                record = Product(**{
+                    'store' : row['store'],
+                    'sku' : row['sku'],
+                    'barcodes' : row['barcodes'],
+                    'name' : row['name'],
+                    'description' : row['description'],
+                    'package' : row['package'],
+                    'image_url' : row['image_url'],
+                    'category' : row['category']
+                })
+                s.add(record)
+            else:
+                id_list.append(row['sku'])
+        print('[START] Product bulk save')
         s.commit() #Attempt to commit all the records
+        print('[DONE] Product bulk done')
     except Exception as e:
-        print('1', e)
+        print('[ERROR] Product bulk error', e)
         s.rollback() #Rollback the changes on error
     finally:
-        print('2')
         s.close() #Close the connection
+
+    # branch product
+    try:
+        for i,row in prices_stock_df.iterrows():
+            # check if product exists
+            branch_product = (
+                s.query(BranchProduct)
+                .filter_by(product=row['sku'], branch=row["branch"])
+                .first()
+            )
+
+            if branch_product is None and row['sku'] in id_list:
+                record = BranchProduct(**{
+                    'product_id' : row['sku'],
+                    'branch' : row['branch'],
+                    'stock' : row['stock'],
+                    'price' : row['price'],
+                })
+                s.add(record)
+        print('[START] BranchProduct bulk save')
+        s.commit() #Attempt to commit all the records
+        print('[DONE] BranchProduct bulk done')
+    except Exception as e:
+        print('[ERROR] BranchProduct bulk error', e)
+        s.rollback() #Rollback the changes on error
+    finally:
+        s.close() #Close the connection
+
 
 
 if __name__ == "__main__":
