@@ -67,6 +67,7 @@ def process_csv_files():
     products_df['store'] = "Richart's"
     products_df = products_df[products_df['NAME'].notna()]
 
+    prices_stock_df = prices_stock_df[prices_stock_df['SKU'].isin(list(products_df.SKU.unique()))]
     prices_stock_df = prices_stock_df[(prices_stock_df['BRANCH'].isin(allowed_branches)) & (prices_stock_df['STOCK'] > 0)]
 
     # write data to database
@@ -90,67 +91,38 @@ def process_csv_files():
     #Create the session
     Session = sessionmaker(bind=engine)
     s = Session()
+    del products_df['BUY_UNIT']
+    del products_df['DESCRIPTION_STATUS']
+    del products_df['ORGANIC_ITEM']
+    del products_df['FINELINE_NUMBER']
+    del products_df['KIRLAND_ITEM']
 
-    id_list =[]
-    # product
-    try:
-        for i,row in products_df.iterrows():
-            # check if product exists
-            product = (
-                s.query(Product)
-                .filter_by(store=row['store'], sku=row["sku"])
-                .first()
-            )
+    print('[START] Product bulk insert started')
+    s.bulk_insert_mappings(Product, products_df.to_dict(orient="records"))
+    s.commit()
+    print('[FINISH] Product bulk insert finished')
+    a = pd.read_sql_table('products', engine)
+    prices_stock_df['sku']=prices_stock_df['sku'].astype(str)
 
-            if product is None:
-                record = Product(**{
-                    'store' : row['store'],
-                    'sku' : row['sku'],
-                    'barcodes' : row['barcodes'],
-                    'name' : row['name'],
-                    'description' : row['description'],
-                    'package' : row['package'],
-                    'image_url' : row['image_url'],
-                    'category' : row['category']
-                })
-                s.add(record)
-            else:
-                id_list.append(row['sku'])
-        print('[START] Product bulk save')
-        s.commit() #Attempt to commit all the records
-        print('[DONE] Product bulk done')
-    except Exception as e:
-        print('[ERROR] Product bulk error', e)
-        s.rollback() #Rollback the changes on error
-    finally:
-        s.close() #Close the connection
+    merge = pd.merge(prices_stock_df, a, left_on='sku', right_on='sku', how='left')
+    del merge['sku']
+    del merge['barcodes']
+    del merge['name']
+    del merge['description']
+    del merge['image_url']
+    del merge['category']
+    del merge['brand']
+    del merge['package']
+    del merge['store']
+    merge.rename(columns={'id':'product_id'}, inplace=True)
+    merge = merge[merge['product_id'].notna()]
 
-    # branch product
-    try:
-        for i,row in prices_stock_df.iterrows():
-            # check if product exists
-            branch_product = (
-                s.query(BranchProduct)
-                .filter_by(product=row['sku'], branch=row["branch"])
-                .first()
-            )
+    s.bulk_insert_mappings(BranchProduct, merge.to_dict(orient="records"))
+    print('[START] BranchProduct bulk insert started')
+    s.commit()
+    print('[FINISH] BranchProduct bulk insert finished')
+    s.close()
 
-            if branch_product is None and row['sku'] in id_list:
-                record = BranchProduct(**{
-                    'product_id' : row['sku'],
-                    'branch' : row['branch'],
-                    'stock' : row['stock'],
-                    'price' : row['price'],
-                })
-                s.add(record)
-        print('[START] BranchProduct bulk save')
-        s.commit() #Attempt to commit all the records
-        print('[DONE] BranchProduct bulk done')
-    except Exception as e:
-        print('[ERROR] BranchProduct bulk error', e)
-        s.rollback() #Rollback the changes on error
-    finally:
-        s.close() #Close the connection
 
 
 
