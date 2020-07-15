@@ -1,4 +1,4 @@
-# Cornershop's backend integrations test
+# Walmart CA webscraper using Scrapy
 
 ## How to run
 
